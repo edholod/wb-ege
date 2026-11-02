@@ -1,7 +1,16 @@
 'use strict';
 const app=document.querySelector('#app'),label='WB ЕГЭ · by @edholod';
-const tg=window.Telegram?.WebApp;
-try{tg?.ready();tg?.expand()}catch{}
+let tg;
+function connectTelegram(){tg=window.Telegram?.WebApp;try{tg?.ready();tg?.expand()}catch{}}
+connectTelegram();
+document.querySelector('#telegram-sdk')?.addEventListener('load',connectTelegram);
+// Read the signed launch payload even when the optional Telegram UI SDK is unavailable.
+// Never infer identity from user IDs, initDataUnsafe or locally saved credentials.
+function telegramData(){
+ connectTelegram();
+ if(tg?.initData)return tg.initData;
+ try{return new URLSearchParams(window.location.hash.slice(1)).get('tgWebAppData')||''}catch{return ''}
+}
 const API=String(window.WB_EGE_API||'').replace(/\/+$/,'');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const html=s=>{app.innerHTML=s;window.scrollTo(0,0)};
@@ -14,8 +23,9 @@ function keepDraft(){try{if(session)localStorage.setItem(draftKey,JSON.stringify
 function restoreDraft(){try{return JSON.parse(localStorage.getItem(draftKey)||'null')}catch{return null}}
 function saveLabel(s){const el=document.querySelector('#save-status');if(el)el.textContent=s}
 async function api(path,params={}){
- if(!tg?.initData)throw Error('Откройте WB ЕГЭ через WebApp-кнопку Telegram');
- let response;try{response=await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...params,bankVersion:questions[0]?.bankVersion||'',initData:tg.initData})})}catch{throw Error('Нет соединения с сервером. Ответы остаются в этом окне.')}
+ const initData=telegramData();
+ if(!initData)throw Error('Telegram не передал данные входа. Закройте окно и откройте тест кнопкой под сообщением бота.');
+ let response;try{response=await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...params,bankVersion:questions[0]?.bankVersion||'',initData})})}catch{throw Error('Нет соединения с сервером. Ответы остаются в этом окне.')}
  let data;try{data=await response.json()}catch{throw Error('Сервер вернул некорректный ответ')}
  if(!response.ok)throw Object.assign(Error(data.error||'Ошибка сервера'),{status:response.status});return data;
 }
@@ -49,7 +59,11 @@ function readableQuestions(serverQuestions){if(!serverQuestions)return questions
 function loadAttempt(a){practice=false;questions=readableQuestions(a.questions);session=a.id;setLayout('attempt:'+session);answers=a.answers;const d=restoreDraft();if(d?.session===session&&d.dirty&&Array.isArray(d.answers)&&d.answers.length===100){if(confirm('Найдены ответы, не подтверждённые сервером. Восстановить их из этого устройства?')){answers=d.answers;dirty=true;generation++;}else{dirty=false;keepDraft()}}else{dirty=false;keepDraft()}
  idx=firstUnanswered();if(idx<0)idx=questions.length-1;question();if(dirty)scheduleSave();}
 async function home(){
- if(!tg?.initData){html(`<div class="brand">${label}</div><div class="card"><h1>Откройте WB ЕГЭ из Telegram</h1><p>Используйте WebApp-кнопку бота, чтобы сохранить попытку и получить результат.</p></div>`);return}
+ if(!telegramData()){
+  let inside=false;try{inside=!!tg?.platform&&tg.platform!=='unknown'||new URLSearchParams(window.location.hash.slice(1)).has('tgWebAppPlatform')}catch{}
+  html(`<div class="brand">${label}</div><div class="card"><h1>${inside?'Telegram не передал данные входа':'Откройте WB ЕГЭ из Telegram'}</h1><p>${inside?'Закройте это окно и откройте тест кнопкой под сообщением бота. Кнопка обычной клавиатуры Telegram может открывать приложение без данных участника.':'Откройте бота @edholod_wbbot и нажмите WebApp-кнопку теста под сообщением.'}</p><p class="muted">Код: ${inside?'TG_LAUNCH_EMPTY':'TG_BROWSER'} · версия входа 20261102. Если ошибка повторится, отправьте этот код автору бота.</p></div>`);
+  button('Проверить вход ещё раз',home);return;
+ }
  try{const s=await api('/status');if(s.bankVersion!==currentQuestions[0]?.bankVersion)throw Error('Обновите страницу: сайт и сервер разных редакций вопросов');isAdmin=s.isAdmin===true;html(`<div class="brand">${label}</div><div class="card"><span class="pill">Независимая аттестация сотрудников ПВЗ</span><h1>WB ЕГЭ</h1><p>100 рабочих ситуаций. В каждой выберите один правильный ответ с учётом всех условий. В новой попытке вопросы и варианты перемешиваются. 90–99 баллов — серебряный сертификат, 100 баллов — золотой.</p><p class="muted">Новая попытка через 24 часа после начала предыдущей. Это не официальный экзамен Wildberries.</p></div>`);
  if(s.active){html(app.innerHTML+'<div class="card"><h2>Незавершённый экзамен</h2><p>Можно продолжить сохранённую попытку.</p></div>');button('Продолжить экзамен',()=>loadAttempt(s.active))}
  else if(s.cooldownSeconds>0){html(app.innerHTML+`<div class="card"><h2>Следующая попытка позже</h2><p>Осталось примерно ${Math.ceil(s.cooldownSeconds/60)} мин.</p></div>`)}
